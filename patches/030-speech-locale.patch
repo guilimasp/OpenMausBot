@@ -1,19 +1,31 @@
 diff --git a/electron/resources/speech-helper.swift b/electron/resources/speech-helper.swift
-index 85e82ea..187a5fe 100644
+index 85e82ea..545b63d 100644
 --- a/electron/resources/speech-helper.swift
 +++ b/electron/resources/speech-helper.swift
-@@ -24,8 +24,16 @@ func fail(_ message: String) -> Never {
+@@ -24,8 +24,28 @@ func fail(_ message: String) -> Never {
  
  SFSpeechRecognizer.requestAuthorization { status in
    guard status == .authorized else { fail("speech-not-authorized") }
 -  guard let recognizer = SFSpeechRecognizer(locale: Locale(identifier: "en-US")),
 -    recognizer.isAvailable
-+  // Recognize in the user's own language: their preferred locales first,
-+  // then the system one, and only then en-US. A hardcoded recognizer
-+  // transcribes every non-English speaker into nonsense.
-+  let candidates =
-+    Locale.preferredLanguages.map { Locale(identifier: $0) }
-+    + [Locale.current, Locale(identifier: "en-US")]
++  // Recognize in the user's own language. A hardcoded en-US recognizer
++  // transcribes every other speaker into nonsense, and the system
++  // language is not a reliable proxy for the language someone speaks —
++  // so an explicit setting wins, then the system's preferences, then
++  // en-US. Set it with {"dictation":{"locale":"pt-BR"}} in
++  // ~/.openmausbot/config.json.
++  var candidates: [Locale] = []
++  let configURL = FileManager.default.homeDirectoryForCurrentUser
++    .appendingPathComponent(".openmausbot/config.json")
++  if let data = try? Data(contentsOf: configURL),
++    let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
++    let dictation = root["dictation"] as? [String: Any],
++    let identifier = dictation["locale"] as? String
++  {
++    candidates.append(Locale(identifier: identifier))
++  }
++  candidates += Locale.preferredLanguages.map { Locale(identifier: $0) }
++  candidates += [Locale.current, Locale(identifier: "en-US")]
 +  guard
 +    let recognizer = candidates.lazy.compactMap({ SFSpeechRecognizer(locale: $0) }).first(where: {
 +      $0.isAvailable
