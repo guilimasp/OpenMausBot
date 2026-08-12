@@ -104,14 +104,24 @@ export async function provisionBox(cfg, botId, botName) {
     let box = await findBox(cfg, botId);
     let created = false;
     if (!box) {
-        const createRes = await boxJson(cfg, "/boxes", {
+        // substrate-side backstop: archives itself (billing pauses, disk
+        // survives) if every stop path dies. Free-trial accounts cap the TTL at
+        // 2h and reject anything longer with trial_auto_stop_required, so fall
+        // back to their ceiling instead of failing to create a box at all.
+        let createRes = await boxJson(cfg, "/boxes", {
             method: "POST",
-            // substrate-side backstop: archives itself (billing pauses, disk
-            // survives) if every stop path dies
             body: JSON.stringify({ ttlSeconds: 8 * 60 * 60 }),
         });
-        if (!createRes.ok || !createRes.body?.box?.id)
-            throw new Error(`box create failed (${createRes.status})`);
+        if (createRes.body?.code === "trial_auto_stop_required") {
+            createRes = await boxJson(cfg, "/boxes", {
+                method: "POST",
+                body: JSON.stringify({ ttlSeconds: 2 * 60 * 60 }),
+            });
+        }
+        if (!createRes.ok || !createRes.body?.box?.id) {
+            const why = createRes.body?.message ?? createRes.body?.error?.message ?? "";
+            throw new Error(`box create failed (${createRes.status})${why ? `: ${why}` : ""}`);
+        }
         box = createRes.body.box;
         created = true;
         await boxJson(cfg, `/boxes/${box.id}`, { method: "PATCH", body: JSON.stringify({ name: vmName }) });
