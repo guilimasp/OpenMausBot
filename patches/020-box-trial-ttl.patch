@@ -1,0 +1,49 @@
+commit f3b58418cb997657a4119ec62432974c73245a09
+Author: Guilherme Lima <60904312+guilimasp@users.noreply.github.com>
+Date:   Wed Aug 12 19:39:39 2026 -0300
+
+    box: fall back to a 2h TTL when the account is on the free trial
+    
+    Creating a box asked for an 8h auto-stop, which free-trial accounts
+    reject with 400 trial_auto_stop_required ("Free-trial Boxes can auto-stop
+    after at most 2 hours"), so the Computer panel could never provision a
+    box on a trial account. Retry at the trial ceiling when the API says so,
+    and surface the API's own message in the thrown error instead of a bare
+    status code.
+    
+    Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+    Claude-Session: https://claude.ai/code/session_01LbrfeNax1KL2rMf7Lwo6gX
+
+diff --git a/server/box.ts b/server/box.ts
+index 0cef43d..c20aade 100644
+--- a/server/box.ts
++++ b/server/box.ts
+@@ -122,13 +122,24 @@ export async function provisionBox(cfg: AppConfig, botId: string, botName: strin
+   let box = await findBox(cfg, botId);
+   let created = false;
+   if (!box) {
+-    const createRes = await boxJson(cfg, "/boxes", {
++    // substrate-side backstop: archives itself (billing pauses, disk
++    // survives) if every stop path dies. Free-trial accounts cap the TTL at
++    // 2h and reject anything longer with trial_auto_stop_required, so fall
++    // back to their ceiling instead of failing to create a box at all.
++    let createRes = await boxJson(cfg, "/boxes", {
+       method: "POST",
+-      // substrate-side backstop: archives itself (billing pauses, disk
+-      // survives) if every stop path dies
+       body: JSON.stringify({ ttlSeconds: 8 * 60 * 60 }),
+     });
+-    if (!createRes.ok || !createRes.body?.box?.id) throw new Error(`box create failed (${createRes.status})`);
++    if (createRes.body?.code === "trial_auto_stop_required") {
++      createRes = await boxJson(cfg, "/boxes", {
++        method: "POST",
++        body: JSON.stringify({ ttlSeconds: 2 * 60 * 60 }),
++      });
++    }
++    if (!createRes.ok || !createRes.body?.box?.id) {
++      const why = createRes.body?.message ?? createRes.body?.error?.message ?? "";
++      throw new Error(`box create failed (${createRes.status})${why ? `: ${why}` : ""}`);
++    }
+     box = createRes.body.box;
+     created = true;
+     await boxJson(cfg, `/boxes/${box.id}`, { method: "PATCH", body: JSON.stringify({ name: vmName }) });
