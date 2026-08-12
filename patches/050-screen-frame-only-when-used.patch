@@ -1,0 +1,41 @@
+diff --git a/server/index.ts b/server/index.ts
+index 4633db4..46defd4 100644
+--- a/server/index.ts
++++ b/server/index.ts
+@@ -129,7 +129,9 @@ function broadcast(payload: unknown) {
+ // ── server-side event folding (upstream's ingestion worker, miniature) ──
+ // The canonical stream is the source of truth; the persisted transcript
+ // and every client view are projections of it.
+-const toolMessageByItem = new Map<string, string>(); // itemId -> messageId
++const toolMessageByItem = new Map<string, string>();
++/** Threads whose current turn actually used the computer tools. */
++const usedComputer = new Set<string>(); // itemId -> messageId
+ const askMessageByRequest = new Map<string, string>(); // requestId -> messageId
+ 
+ bus.subscribe((event: RuntimeEvent) => {
+@@ -169,6 +171,7 @@ bus.subscribe((event: RuntimeEvent) => {
+       if (event.itemType === "tool") {
+         const message = pushMessage({ role: "bot", kind: "activity", tool: { name: event.title ?? "tool" } });
+         if (event.itemId) toolMessageByItem.set(event.itemId, message.id);
++        if ((event.title ?? "").startsWith("mcp__computer__")) usedComputer.add(event.threadId);
+       }
+       break;
+     case "request.opened": {
+@@ -204,10 +207,14 @@ bus.subscribe((event: RuntimeEvent) => {
+       pushMessage({ role: "bot", kind: "activity", tool: { name: `error: ${event.message.slice(0, 160)}`, ok: false } });
+       break;
+     case "turn.completed": {
+-      // the last live frame becomes a settled inline screen message —
+-      // the screenshot-in-chat moment
++      // the last live frame becomes a settled inline screen message — the
++      // screenshot-in-chat moment. Only when the bot actually touched the
++      // screen this turn: a bot that merely has a computer would otherwise
++      // drop the same idle desktop into the transcript after every reply.
+       const frame = stopScreenPoller(bot.id);
+-      if (frame) pushMessage({ role: "bot", kind: "screen", png: frame.png, mime: frame.mime });
++      if (frame && usedComputer.delete(event.threadId)) {
++        pushMessage({ role: "bot", kind: "screen", png: frame.png, mime: frame.mime });
++      }
+       store.patchBot(bot.id, { busy: false, unread: true });
+       broadcast({ kind: "bot", bot: store.bot(bot.id) });
+       break;
