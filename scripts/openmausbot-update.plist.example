@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.guilimasp.openmausbot-update</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>-lc</string>
+    <string>cd "$HOME/Projects/OpenMausBot" &amp;&amp; ./scripts/update-app.sh --auto</string>
+  </array>
+
+  <!-- every four hours; --auto exits immediately when there is nothing
+       new or when the app is open, so the local build never lags the
+       published release for long -->
+  <key>StartInterval</key>
+  <integer>14400</integer>
+
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+  </dict>
+
+  <key>StandardOutPath</key>
+  <string>$HOME/Library/Logs/openmausbot-update.log</string>
+  <key>StandardErrorPath</key>
+  <string>$HOME/Library/Logs/openmausbot-update.log</string>
+
+  <key>RunAtLoad</key>
+  <false/>
+  <key>LowPriorityIO</key>
+  <true/>
+  <key>Nice</key>
+  <integer>5</integer>
+</dict>
+</plist>
