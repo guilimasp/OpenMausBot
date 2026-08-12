@@ -1,0 +1,109 @@
+# Daily sync with milind-soni/OpenMausBot.
+#
+# Branch model of this fork:
+#   - `main`   is a pure mirror of upstream main — never commit to it
+#   - `hermes` carries our own files rebased on top of main; the app is
+#     always built from `hermes`
+#
+# The rule is that the newest upstream version always wins: a local change
+# that gets in the way is dropped and reported, never allowed to hold the
+# branch back. The only thing that stops a sync from being published is
+# upstream failing its own typecheck and tests, because shipping a build
+# that does not run is worse than being a day behind.
+name: Upstream sync
+on:
+  schedule:
+    - cron: "17 6 * * *"
+  workflow_dispatch: {}
+permissions:
+  contents: write
+  issues: write
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+      - name: Mirror main from upstream
+        run: |
+          git remote add upstream https://github.com/milind-soni/OpenMausBot.git
+          git fetch upstream main
+          # main is a pure mirror and upstream rewrites its history
+          # (amends and rebases land most days), so mirror by reset rather
+          # than merge — a fast-forward would fail on every rewrite
+          git reset --hard upstream/main
+          git push --force origin main
+      - name: Rebase hermes onto main
+        id: rebase
+        run: |
+          git config user.name "upstream-sync[bot]"
+          git config user.email "actions@users.noreply.github.com"
+          git fetch origin hermes
+          git checkout -B hermes origin/hermes
+          # Upstream always wins. Three attempts, in order:
+          #   1. plain rebase — also drops our copies of commits upstream
+          #      merged or rewrote, since the patch-id matches
+          #   2. rebase preferring upstream on conflicting hunks, so a local
+          #      edit to a file upstream also changed is discarded rather
+          #      than stalling the branch
+          #   3. rebuild the branch from upstream plus our own files only
+          # Whatever we lose is reported; being behind upstream is not an
+          # option, because that is what silently stops the app updating.
+          if git rebase main; then
+            echo "rebased=clean" >> "$GITHUB_OUTPUT"
+          else
+            git rebase --abort || true
+            if git rebase -X ours main; then
+              echo "rebased=upstream-preferred" >> "$GITHUB_OUTPUT"
+            else
+              git rebase --abort || true
+              git reset --hard main
+              # our additions live in files upstream does not have, so they
+              # replay cleanly from the previous tip
+              git checkout origin/hermes -- .github/workflows/upstream-sync.yml scripts/ || true
+              git add -A
+              git commit -q -m "Fork tooling on top of upstream (local edits dropped by sync)" || true
+              echo "rebased=rebuilt" >> "$GITHUB_OUTPUT"
+            fi
+          fi
+      # The repo's CI only runs on main and pull requests, so the rebased
+      # branch is verified here: a sync that breaks our driver must not be
+      # pushed silently.
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - name: Verify the rebased branch
+        id: verify
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm typecheck
+          pnpm test
+      - name: Push hermes
+        if: steps.verify.outcome == 'success'
+        run: git push --force-with-lease origin hermes
+      # Losing a local edit is fine, but it must never happen silently.
+      - name: Report a sync that dropped something or failed
+        if: always() && (failure() || steps.rebase.outputs.rebased != 'clean')
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MODE: ${{ steps.rebase.outputs.rebased }}
+          VERIFY: ${{ steps.verify.outcome }}
+        run: |
+          existing=$(gh issue list --repo "$GITHUB_REPOSITORY" \
+            --search "Upstream sync needs attention in:title" --state open --json number --jq length)
+          if [ "$existing" != "0" ]; then exit 0; fi
+          run_url="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          case "$MODE" in
+            upstream-preferred)
+              body="Upstream changed files this branch had also changed. The sync kept upstream's version of the conflicting hunks, so \`hermes\` is current — but a local edit was dropped. Check the diff against \`main\` and re-apply anything still wanted: $run_url" ;;
+            rebuilt)
+              body="The rebase could not be resolved, so \`hermes\` was rebuilt from upstream plus this fork's own files (\`scripts/\` and the sync workflow). Any other local change is gone from the branch and lives only in the reflog of the previous tip: $run_url" ;;
+            *)
+              body="The sync rebased \`hermes\` onto the new upstream \`main\`, but typecheck or tests failed (\`$VERIFY\`), so nothing was pushed — the app keeps running the last good build. Upstream likely broke something: $run_url" ;;
+          esac
+          gh issue create --repo "$GITHUB_REPOSITORY" \
+            --title "Upstream sync needs attention" --body "$body"
