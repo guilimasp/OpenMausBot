@@ -1,0 +1,14 @@
+diff --git a/server/index.ts b/server/index.ts
+index 4633db4..f5dd4c5 100644
+--- a/server/index.ts
++++ b/server/index.ts
+@@ -379,6 +379,9 @@ async function startTurn(botId: string, text: string, opts?: { commsDepth?: numb
+             : integrations.localComputer
+               ? " You can act on the user's computer through the computer tools — take a screenshot or read the desktop state first, prefer accessibility actions over raw coordinates, and act carefully."
+               : "") +
++          (integrations.composio
++            ? " The user's connected apps (Gmail, Calendar, Slack, Notion, and the rest) are reachable through the composio tools — find the right one with COMPOSIO_SEARCH_TOOLS and run it with COMPOSIO_EXECUTE_TOOL. Reach for them before telling the user you have no access to a service."
++            : "") +
+           (integrations.agents
+             ? " You can work with the user's other bots through the agents tools — list_bots shows who's available, ask_bot sends one of them a message and returns their reply."
+             : "") +
