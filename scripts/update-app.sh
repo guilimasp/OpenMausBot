@@ -51,6 +51,14 @@ fi
 pnpm() { command pnpm "$@" 2>/dev/null || corepack pnpm "$@"; }
 
 if [ "$AUTO" != "--auto" ]; then
+  # Installing means replacing the bundle, which quits the running app —
+  # from the user's side that looks exactly like a crash. Never do it
+  # behind their back.
+  if [ "$AUTO" != "--force" ] && pgrep -qf "$APP/Contents/MacOS"; then
+    echo "OpenMausBot is open. Quit it first, or re-run with --force to have"
+    echo "this script quit it for you." >&2
+    exit 0
+  fi
   echo "==> Pulling $(git rev-parse --abbrev-ref HEAD)"
   git pull --rebase --autostash
 fi
