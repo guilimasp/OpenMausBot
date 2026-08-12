@@ -68,6 +68,9 @@ restore_tree() {
     for f in "${PATCHED_FILES[@]}"; do
       git ls-files --error-unmatch "$f" >/dev/null 2>&1 || rm -f "$f"
     done
+    # dist-server is a checked-in build output, so patched sources leave it
+    # dirty; it is regenerated on every build anyway
+    git checkout -- dist-server 2>/dev/null || true
   fi
   [ -f "${ICON_DIR:-}/app-icon.orig.png" ] && cp "$ICON_DIR/app-icon.orig.png" electron/resources/app-icon.png 2>/dev/null || true
 }
