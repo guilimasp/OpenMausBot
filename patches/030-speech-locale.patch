@@ -21,20 +21,3 @@ index 85e82ea..187a5fe 100644
    else { fail("recognizer-unavailable") }
  
    let request = SFSpeechAudioBufferRecognitionRequest()
-diff --git a/scripts/update-app.sh b/scripts/update-app.sh
-index ef8165c..cf5485f 100755
---- a/scripts/update-app.sh
-+++ b/scripts/update-app.sh
-@@ -80,8 +80,11 @@ shopt -s nullglob
- patches=(patches/*.patch)
- if [ ${#patches[@]} -gt 0 ]; then
-   echo "==> Applying ${#patches[@]} local patch(es)"
--  if [ -n "$(git status --porcelain -- ':!patches')" ]; then
-+  # build/ holds this script's own scratch (the padded icon, the Pillow
-+  # venv), so it must not count as a dirty tree
-+  if [ -n "$(git status --porcelain -- ':!patches' ':!build/.dock-icon' ':!build/.icon-venv')" ]; then
-     echo "    working tree is dirty — commit or stash first" >&2
-+    git status --short -- ':!patches' ':!build/.dock-icon' ':!build/.icon-venv' >&2
-     exit 1
-   fi
-   for p in "${patches[@]}"; do
