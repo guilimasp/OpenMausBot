@@ -1,6 +1,6 @@
 --- a/src/components/Composer.tsx
 +++ b/src/components/Composer.tsx
-@@ -1,10 +1,12 @@
+@@ -1,10 +1,17 @@
  import { track } from "@/lib/analytics";
 -import { useEffect, useMemo, useRef, useState } from "react";
 +import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -9,57 +9,72 @@
  import { cn } from "@/lib/cn";
  import { useDraft } from "@/lib/drafts";
  import { MausAvatar } from "./Avatar";
-+import { ComposerAnnexes } from "./ComposerAnnexes";
-+import { composeMessage, isLongPaste, pasteAnnex, type Annex } from "@/lib/composer-attachments";
++import { ComposerAttachments } from "./ComposerAttachments";
++import {
++  composeMessage,
++  isLongPaste,
++  pasteAttachment,
++  type Attachment,
++} from "@/lib/composer-attachments";
  import { normalizeState } from "@/lib/mascot";
  
  /** The active @mention query at the caret: the text between an `@` that
-@@ -40,6 +42,14 @@
+@@ -40,6 +47,17 @@
    // per-thread draft: switching bots unmounts this component, so the text
    // has to outlive it (see lib/drafts)
    const [text, setText] = useDraft(group ? `group:${group.id}` : `bot:${bot?.id ?? ""}`);
-+  // annexed to the next message: long pastes and dropped files (see
-+  // ComposerAnnexes) — folded into the text on send
-+  const [annexes, setAnnexes] = useState<Annex[]>([]);
-+  const addAnnexes = useCallback((next: Annex[]) => setAnnexes((prev) => [...prev, ...next]), []);
-+  const removeAnnex = useCallback(
-+    (id: string) => setAnnexes((prev) => prev.filter((a) => a.id !== id)),
++  // attached to the next message: long pastes and dropped files (see
++  // ComposerAttachments) — folded into the text on send
++  const [attachments, setAttachments] = useState<Attachment[]>([]);
++  const addAttachments = useCallback(
++    (next: Attachment[]) => setAttachments((prev) => [...prev, ...next]),
++    [],
++  );
++  const removeAttachment = useCallback(
++    (id: string) => setAttachments((prev) => prev.filter((a) => a.id !== id)),
 +    [],
 +  );
    const [recording, setRecording] = useState(false);
    const [speechError, setSpeechError] = useState<string | null>(null);
    const [caret, setCaret] = useState(0);
-@@ -91,11 +101,12 @@
+@@ -90,12 +108,15 @@
+   // One message may be queued while the bot works; it auto-sends the moment
    // the turn settles. Enter during a turn queues instead of silently dying.
    const [queued, setQueued] = useState<string | null>(null);
++  // a chip on its own is a message: the send control has to appear for it
++  const hasContent = Boolean(text.trim()) || attachments.length > 0;
    const send = () => {
 -    const t = text.trim();
-+    const t = composeMessage(text, annexes);
++    const t = composeMessage(text, attachments);
      if (!t) return;
      if (busy) {
        setQueued(t);
        setText("");
-+      setAnnexes([]);
++      setAttachments([]);
        return;
      }
      if (group) {
-@@ -106,6 +117,7 @@
+@@ -106,6 +127,7 @@
        track("message_sent", { driver: bot.modelSelection?.instanceId });
      }
      setText("");
-+    setAnnexes([]);
++    setAttachments([]);
    };
    useEffect(() => {
      if (!busy && queued) {
-@@ -207,6 +219,7 @@
+@@ -207,6 +229,11 @@
              ))}
            </div>
          )}
-+        <ComposerAnnexes items={annexes} onAdd={addAnnexes} onRemove={removeAnnex} />
++        <ComposerAttachments
++          items={attachments}
++          onAdd={addAttachments}
++          onRemove={removeAttachment}
++        />
          <div className="flex items-end gap-2 rounded-3xl border border-hairline/40 bg-raised/60 py-2 pl-3 pr-2">
          <textarea
            ref={inputRef}
-@@ -217,6 +230,13 @@
+@@ -217,6 +244,13 @@
              setCaret(e.target.selectionStart ?? e.target.value.length);
              setDismissedAt(null);
            }}
@@ -68,11 +83,29 @@
 +            const pasted = e.clipboardData.getData("text/plain");
 +            if (!isLongPaste(pasted)) return;
 +            e.preventDefault();
-+            addAnnexes([pasteAnnex(pasted)]);
++            setAttachments((prev) => [...prev, pasteAttachment(pasted)]);
 +          }}
            onKeyUp={(e) => setCaret((e.target as HTMLTextAreaElement).selectionStart ?? 0)}
            onClick={(e) => setCaret((e.target as HTMLTextAreaElement).selectionStart ?? 0)}
            onKeyDown={(e) => {
+@@ -276,7 +310,7 @@
+             <Square size={14} className="fill-current" />
+           </button>
+         )}
+-        {!busy && !text.trim() && (
++        {!busy && !hasContent && (
+           <button
+             onClick={toggleMic}
+             aria-label={recording ? "Stop dictation" : "Start dictation"}
+@@ -291,7 +325,7 @@
+             <Mic size={18} />
+           </button>
+         )}
+-        {text.trim() && (
++        {hasContent && (
+           <button
+             onClick={send}
+             aria-label={busy ? "Queue message" : "Send message"}
 diff --git a/electron/preload.cjs b/electron/preload.cjs
 index 92366f9..5d4a988 100644
 --- a/electron/preload.cjs
