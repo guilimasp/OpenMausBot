@@ -5,6 +5,8 @@ import { useStore, type Bot } from "@/state/store";
 import { cn } from "@/lib/cn";
 import { MausAvatar } from "./Avatar";
 import { normalizeState } from "@/lib/mascot";
+import { AttachmentStrip } from "./Attachments";
+import { hasImages, imagesFromClipboard, MAX_ATTACHMENTS, type Attachment } from "@/lib/images";
 
 /** The active @mention query at the caret: the text between an `@` that
  * starts a word and the caret. null = no mention being typed. */
@@ -21,6 +23,7 @@ function mentionQueryAt(text: string, caret: number): { start: number; query: st
 export function Composer({ bot }: { bot: Bot }) {
   const { state, dispatch } = useStore();
   const [text, setText] = useState("");
+  const [images, setImages] = useState<Attachment[]>([]);
   const [recording, setRecording] = useState(false);
   const [speechError, setSpeechError] = useState<string | null>(null);
   const [caret, setCaret] = useState(0);
@@ -61,10 +64,21 @@ export function Composer({ bot }: { bot: Bot }) {
   };
 
   const send = () => {
-    if (!text.trim() || bot.busy) return;
-    dispatch({ type: "send", botId: bot.id, text: text.trim() });
+    if ((!text.trim() && images.length === 0) || bot.busy) return;
+    dispatch({ type: "send", botId: bot.id, text: text.trim(), images });
     track("message_sent", { driver: bot.modelSelection?.instanceId });
     setText("");
+    setImages([]);
+  };
+
+  // paste an image (or several) straight into the box — the text paste path
+  // is untouched, since a text clipboard carries no image items
+  const onPaste = (e: React.ClipboardEvent) => {
+    if (!hasImages(e.clipboardData)) return;
+    e.preventDefault();
+    void imagesFromClipboard(e.clipboardData).then((pasted) => {
+      if (pasted.length) setImages((cur) => [...cur, ...pasted].slice(0, MAX_ATTACHMENTS));
+    });
   };
 
   // native dictation: partials stream into the input while the Swift
@@ -135,6 +149,7 @@ export function Composer({ bot }: { bot: Bot }) {
             ))}
           </div>
         )}
+        <AttachmentStrip images={images} onRemove={(i) => setImages((cur) => cur.filter((_, j) => j !== i))} />
         <div className="flex items-center gap-2 rounded-full border border-hairline/40 bg-raised/60 py-2 pl-2 pr-2">
         <button
           className="flex size-8 shrink-0 items-center justify-center rounded-full text-ink-secondary hover:bg-raised hover:text-ink"
@@ -150,6 +165,7 @@ export function Composer({ bot }: { bot: Bot }) {
             setCaret(e.target.selectionStart ?? e.target.value.length);
             setDismissedAt(null);
           }}
+          onPaste={onPaste}
           onKeyUp={(e) => setCaret((e.target as HTMLInputElement).selectionStart ?? 0)}
           onClick={(e) => setCaret((e.target as HTMLInputElement).selectionStart ?? 0)}
           onKeyDown={(e) => {

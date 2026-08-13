@@ -16,6 +16,7 @@ import { homedir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { userContent } from "../attachments.ts";
 import { DATA_DIR } from "../config.ts";
 import { augmentedPath } from "../env-path.ts";
 
@@ -459,7 +460,9 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
       emit({ ...base(threadId, turnId), type: "turn.started" });
 
       // prompt over stdin as a stream-json message — never argv (ARG_MAX)
-      const promptMsg = { type: "user", message: { role: "user", content: turn.text } };
+      // attached images ride along as Messages-API image blocks; with none,
+      // content stays a plain string
+      const promptMsg = { type: "user", message: { role: "user", content: userContent(turn.text, turn.images) } };
       child.stdin.write(JSON.stringify(promptMsg) + "\n");
       child.stdin.end();
       appendNative(threadId, { dir: "out", source: "claude.sdk.message", msg: promptMsg });

@@ -48,6 +48,8 @@ export interface Message {
   /** screen messages: a frame of the bot's computer (base64 image) */
   png?: string;
   mime?: string;
+  /** images the user attached to this message (base64) */
+  images?: Array<{ mime: string; data: string; name?: string }>;
   at: number;
 }
 

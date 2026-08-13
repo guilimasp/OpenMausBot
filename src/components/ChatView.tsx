@@ -7,6 +7,7 @@ import { ChatMarkdown } from "./ChatMarkdown";
 import { OptionCard } from "./OptionCard";
 import { Composer } from "./Composer";
 import { ModelPicker } from "./ModelPicker";
+import { MessageImages } from "./Attachments";
 import { cn } from "@/lib/cn";
 
 /** Long user messages collapse behind a fade so pasted walls of text don't
@@ -40,6 +41,7 @@ function Bubble({ message }: { message: Message }) {
                 Show full message
               </button>
             )}
+            {message.images?.length ? <MessageImages images={message.images} /> : null}
           </>
         ) : (
           <ChatMarkdown text={text} />

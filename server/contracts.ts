@@ -89,6 +89,9 @@ export type RuntimeEventListener = (event: RuntimeEvent) => void;
 export interface SendTurnInput {
   threadId: ThreadId;
   text: string;
+  /** Images the user attached (base64). Drivers that cannot pass images to
+   * their agent ignore them and send the text alone. */
+  images?: Array<{ mime: string; data: string; name?: string }>;
   model?: string;
   resumeCursor?: unknown;
   /** Prior turns for transcript-replay providers (API-backed drivers). */

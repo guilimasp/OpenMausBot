@@ -8,6 +8,7 @@ import { homedir } from "node:os";
 import { dirname, extname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { sanitizeImages, type ImageAttachment } from "./attachments.ts";
 import * as box from "./box.ts";
 import * as composio from "./composio.ts";
 import { ensureDirs, instanceConfigs, loadConfig, saveConfig, EVENTS_DIR, NATIVE_DIR } from "./config.ts";
@@ -282,7 +283,11 @@ function readCuaConnection(): { command: string; args: string[]; env: Record<str
 }
 
 // ── turn dispatch (upstream ProviderCommandReactor, miniature) ──────────
-async function startTurn(botId: string, text: string, opts?: { commsDepth?: number }) {
+async function startTurn(
+  botId: string,
+  text: string,
+  opts?: { commsDepth?: number; images?: ImageAttachment[] },
+) {
   const bot = store.bot(botId);
   if (!bot) throw Object.assign(new Error("no such bot"), { status: 404 });
   if (bot.busy) throw Object.assign(new Error("the bot is already working — interrupt it first"), { status: 409 });
@@ -296,7 +301,8 @@ async function startTurn(botId: string, text: string, opts?: { commsDepth?: numb
     );
   }
 
-  const userMessage = store.appendMessage(bot.threadId, { role: "user", kind: "text", text });
+  const images = opts?.images?.length ? opts.images : undefined;
+  const userMessage = store.appendMessage(bot.threadId, { role: "user", kind: "text", text, images });
   broadcast({ kind: "message", threadId: bot.threadId, message: userMessage });
 
   // transcript for API-backed drivers: settled text turns only
@@ -369,6 +375,7 @@ async function startTurn(botId: string, text: string, opts?: { commsDepth?: numb
       await instance.adapter.sendTurn({
         threadId: bot.threadId,
         text,
+        images,
         model: bot.modelSelection.model,
         resumeCursor: bot.resumeCursors[bot.modelSelection.instanceId],
         transcript,
@@ -582,8 +589,9 @@ const server = createServer(async (req, res) => {
     if (m && method === "POST") {
       const body = await readBody(req);
       const text = String(body.text ?? "").trim();
-      if (!text) return json(res, 400, { error: "text required" });
-      await startTurn(m[1], text);
+      const images = sanitizeImages(body.images);
+      if (!text && images.length === 0) return json(res, 400, { error: "text required" });
+      await startTurn(m[1], text, { images });
       return json(res, 202, { ok: true });
     }
     m = path.match(/^\/api\/bots\/([\w-]+)\/respond$/);

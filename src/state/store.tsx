@@ -36,6 +36,8 @@ export interface Message {
   /** screen messages: a frame of the bot's computer (base64) */
   png?: string;
   mime?: string;
+  /** images the user attached to this message (base64) */
+  images?: Array<{ mime: string; data: string; name?: string }>;
   at: number;
 }
 
@@ -115,7 +117,7 @@ type Action =
   | { type: "instances"; instances: InstanceInfo[] }
   | { type: "configStatus"; config: ConfigStatus }
   | { type: "select"; id: string }
-  | { type: "send"; botId: string; text: string }
+  | { type: "send"; botId: string; text: string; images?: Message["images"] }
   | { type: "answerCard"; botId: string; messageId: string; answer: string }
   | { type: "dismissCard"; botId: string; messageId: string }
   | { type: "newBot" }
@@ -422,7 +424,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         case "send":
           api(`/api/bots/${action.botId}/messages`, {
             method: "POST",
-            body: JSON.stringify({ text: action.text }),
+            body: JSON.stringify({ text: action.text, images: action.images }),
           }).catch(showError);
           break;
         case "answerCard": {
