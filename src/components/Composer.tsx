@@ -18,7 +18,7 @@ function mentionQueryAt(text: string, caret: number): { start: number; query: st
   return { start: at, query };
 }
 
-export function Composer({ bot }: { bot: Bot }) {
+export function Composer({ bot, onEditLast }: { bot: Bot; onEditLast?: () => void }) {
   const { state, dispatch } = useStore();
   const [text, setText] = useState("");
   const [recording, setRecording] = useState(false);
@@ -179,6 +179,12 @@ export function Composer({ bot }: { bot: Bot }) {
                 setDismissedAt(mention?.start ?? null);
                 return;
               }
+            }
+            // an empty composer + ArrowUp = edit your last message (like a chat app)
+            if (e.key === "ArrowUp" && !text && onEditLast) {
+              e.preventDefault();
+              onEditLast();
+              return;
             }
             // Shift+Enter inserts a newline; plain Enter sends
             if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
