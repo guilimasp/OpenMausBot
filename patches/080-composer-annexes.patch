@@ -1,0 +1,118 @@
+diff --git a/electron/preload.cjs b/electron/preload.cjs
+index 92366f9..5d4a988 100644
+--- a/electron/preload.cjs
++++ b/electron/preload.cjs
+@@ -1,6 +1,6 @@
+ // Renderer bridge. contextIsolation stays on; the renderer only ever sees
+ // this narrow surface (window.ogb), never Node or ipcRenderer itself.
+-const { contextBridge, ipcRenderer } = require("electron");
++const { contextBridge, ipcRenderer, webUtils } = require("electron");
+ 
+ contextBridge.exposeInMainWorld("ogb", {
+   /** Host platform ("darwin" | "win32" | "linux") — for platform-aware UI. */
+@@ -19,6 +19,15 @@ contextBridge.exposeInMainWorld("ogb", {
+     ipcRenderer.on("speech:end", handler);
+     return () => ipcRenderer.removeListener("speech:end", handler);
+   },
++  /** Absolute path of a dropped File — Electron 32 removed File.path, and
++   * only the preload can ask. "" when the drag carried no file on disk. */
++  getPathForFile: (file) => {
++    try {
++      return webUtils.getPathForFile(file);
++    } catch {
++      return "";
++    }
++  },
+   /** {mic} TCC status strings: granted|denied|not-determined|unknown.
+    * No screen field — macOS 15+ caches that status per-process, so any
+    * value here would lie for the whole session after a grant. */
+diff --git a/src/components/Composer.tsx b/src/components/Composer.tsx
+index 844eb77..3a67a6a 100644
+--- a/src/components/Composer.tsx
++++ b/src/components/Composer.tsx
+@@ -1,9 +1,11 @@
+ import { track } from "@/lib/analytics";
+-import { useEffect, useMemo, useRef, useState } from "react";
++import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+ import { ArrowUp, Clock, Mic, Square, X } from "lucide-react";
+ import { useStore, type Bot, type Group } from "@/state/store";
+ import { cn } from "@/lib/cn";
+ import { MausAvatar } from "./Avatar";
++import { ComposerAnnexes } from "./ComposerAnnexes";
++import { composeMessage, isLongPaste, pasteAnnex, type Annex } from "@/lib/composer-attachments";
+ import { normalizeState } from "@/lib/mascot";
+ 
+ /** The active @mention query at the caret: the text between an `@` that
+@@ -37,6 +39,14 @@ export function Composer({
+     ? (members?.find((b) => b.id === group.busyBotId)?.name ?? "A bot")
+     : (bot?.name ?? "The bot");
+   const [text, setText] = useState("");
++  // annexed to the next message: long pastes and dropped files (see
++  // ComposerAnnexes) — folded into the text on send
++  const [annexes, setAnnexes] = useState<Annex[]>([]);
++  const addAnnexes = useCallback((next: Annex[]) => setAnnexes((prev) => [...prev, ...next]), []);
++  const removeAnnex = useCallback(
++    (id: string) => setAnnexes((prev) => prev.filter((a) => a.id !== id)),
++    [],
++  );
+   const [recording, setRecording] = useState(false);
+   const [speechError, setSpeechError] = useState<string | null>(null);
+   const [caret, setCaret] = useState(0);
+@@ -88,11 +98,12 @@ export function Composer({
+   // the turn settles. Enter during a turn queues instead of silently dying.
+   const [queued, setQueued] = useState<string | null>(null);
+   const send = () => {
+-    const t = text.trim();
++    const t = composeMessage(text, annexes);
+     if (!t) return;
+     if (busy) {
+       setQueued(t);
+       setText("");
++      setAnnexes([]);
+       return;
+     }
+     if (group) {
+@@ -103,6 +114,7 @@ export function Composer({
+       track("message_sent", { driver: bot.modelSelection?.instanceId });
+     }
+     setText("");
++    setAnnexes([]);
+   };
+   useEffect(() => {
+     if (!busy && queued) {
+@@ -204,6 +216,7 @@ export function Composer({
+             ))}
+           </div>
+         )}
++        <ComposerAnnexes items={annexes} onAdd={addAnnexes} onRemove={removeAnnex} />
+         <div className="flex items-end gap-2 rounded-3xl border border-hairline/40 bg-raised/60 py-2 pl-3 pr-2">
+         <textarea
+           ref={inputRef}
+@@ -214,6 +227,13 @@ export function Composer({
+             setCaret(e.target.selectionStart ?? e.target.value.length);
+             setDismissedAt(null);
+           }}
++          onPaste={(e) => {
++            // a wall of text becomes a chip instead of burying the input
++            const pasted = e.clipboardData.getData("text/plain");
++            if (!isLongPaste(pasted)) return;
++            e.preventDefault();
++            addAnnexes([pasteAnnex(pasted)]);
++          }}
+           onKeyUp={(e) => setCaret((e.target as HTMLTextAreaElement).selectionStart ?? 0)}
+           onClick={(e) => setCaret((e.target as HTMLTextAreaElement).selectionStart ?? 0)}
+           onKeyDown={(e) => {
+diff --git a/src/types/ogb.d.ts b/src/types/ogb.d.ts
+index 2a2f569..10ee5d3 100644
+--- a/src/types/ogb.d.ts
++++ b/src/types/ogb.d.ts
+@@ -12,6 +12,9 @@ declare global {
+         cb: (line: { partial?: boolean; text?: string; error?: string }) => void,
+       ): () => void;
+       onSpeechEnd(cb: (info: { code: number | null }) => void): () => void;
++      /** Absolute path of a dropped File ("" when the drag carried no file
++       * on disk). Absent in older builds of the shell. */
++      getPathForFile?(file: File): string;
+       /** {mic} TCC status: granted|denied|not-determined|unknown. Screen
+        * status is deliberately absent — macOS 15+ caches it per-process,
+        * so it lies for the whole session after a grant. */
