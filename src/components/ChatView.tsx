@@ -111,7 +111,9 @@ function Bubble({
   return (
     <div className={cn("group flex w-full flex-col", user ? "items-end" : "items-start")}>
       <div className={cn("flex w-full items-center gap-1.5", user ? "justify-end" : "justify-start")}>
-        {user && message.kind === "text" && (
+        {/* editing rewinds the thread, so it waits for the turn to end —
+            same rule as the version switcher below */}
+        {user && message.kind === "text" && !bot.busy && (
           <button
             onClick={onStartEdit}
             className="rounded-md p-1.5 text-ink-secondary opacity-0 transition-opacity hover:bg-raised hover:text-ink group-hover:opacity-100"
@@ -290,7 +292,7 @@ export function ChatView({ bot }: { bot: Bot }) {
         >
           <MausAvatar
             color={bot.color}
-            state={stateForBot(bot)}
+            state={stateForBot({ ...bot, messages })}
             size={28}
             motion={mascotMotion?.kind ?? "none"}
             motionKey={mascotMotion?.nonce ?? 0}

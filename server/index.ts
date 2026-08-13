@@ -132,32 +132,10 @@ function broadcast(payload: unknown) {
 const toolMessageByItem = new Map<string, string>(); // itemId -> messageId
 const askMessageByRequest = new Map<string, string>(); // requestId -> messageId
 
-// The turn the harness last started per thread, and turns it force-settled
-// (an edit gave up waiting for the driver): any straggler event a dead turn
-// emits later is dropped before it can pollute the stream or transcript.
-const liveTurns = new Map<string, string>(); // threadId -> turnId
-const staleTurns = new Set<string>();
-
 bus.subscribe((event: RuntimeEvent) => {
-  if (event.turnId && staleTurns.has(event.turnId)) return;
   broadcast({ kind: "runtime", event });
   const bot = store.botByThread(event.threadId);
   if (!bot) return;
-
-  // Events from a turn that already settled (interrupted before an edit,
-  // say) must never fold into the transcript — a straggler landing after
-  // a branch is exactly how a conversation grows two parallel tails.
-  if (
-    !bot.busy &&
-    (event.type === "session.started" ||
-      event.type === "item.completed" ||
-      event.type === "item.started" ||
-      event.type === "request.opened" ||
-      event.type === "runtime.error" ||
-      event.type === "turn.completed")
-  ) {
-    return;
-  }
 
   const pushMessage = (m: Omit<Message, "id" | "at">) => {
     const message = store.appendMessage(event.threadId, m);
@@ -338,11 +316,12 @@ async function startTurn(
     .map((m) => ({ role: m.role === "user" ? ("user" as const) : ("assistant" as const), text: m.text! }));
 
   // After a rewind (edit / branch switch) the provider's native session
-  // still contains the abandoned branch: drop every resume cursor so the
-  // next session starts clean, and for cursor-resuming drivers replay the
-  // surviving path inline (transcript-replay drivers get it via transcript).
+  // still contains the abandoned branch: start a fresh session instead of
+  // resuming, and for cursor-resuming drivers replay the surviving path
+  // inline (transcript-replay drivers get it via transcript). The flag is
+  // cleared only once the turn is actually dispatched — clearing it here
+  // would cost the next attempt its history if this dispatch fails.
   const rewound = Boolean(bot.rewound);
-  if (rewound) store.patchBot(bot.id, { rewound: false, resumeCursors: {} });
   const turnText =
     rewound && instance.driverKind !== "grok" && transcript.length
       ? [
@@ -416,11 +395,12 @@ async function startTurn(
           )
         : [];
 
-      const { turnId } = await instance.adapter.sendTurn({
+      await instance.adapter.sendTurn({
         threadId: bot.threadId,
         text: turnText,
         model: bot.modelSelection.model,
-        resumeCursor: bot.resumeCursors[bot.modelSelection.instanceId],
+        // a rewound thread never resumes the abandoned branch's session
+        resumeCursor: rewound ? undefined : bot.resumeCursors[bot.modelSelection.instanceId],
         transcript,
         system:
           persona +
@@ -439,7 +419,8 @@ async function startTurn(
             : ""),
         integrations,
       });
-      liveTurns.set(bot.threadId, turnId);
+      // dispatched: the rewind is spent, and the old cursors are dead
+      if (rewound) store.patchBot(bot.id, { rewound: false, resumeCursors: {} });
       if (integrations.computer) startScreenPoller(bot.id);
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e);
@@ -453,39 +434,6 @@ async function startTurn(
       broadcast({ kind: "bot", bot: store.bot(bot.id) });
     }
   })();
-}
-
-/** Resolve once the thread's in-flight turn settles (turn.completed) or
- * the deadline passes — the edit flow must never branch under a live turn.
- * The default outlasts every driver's own interrupt settle window (ACP's
- * is 5s), so force-settling stays a truly exceptional path. */
-function waitForIdle(threadId: string, timeoutMs = 8000): Promise<void> {
-  if (!store.botByThread(threadId)?.busy) return Promise.resolve();
-  return new Promise((resolve) => {
-    const done = () => {
-      clearTimeout(timer);
-      unsub();
-      resolve();
-    };
-    const unsub = bus.subscribe((e: RuntimeEvent) => {
-      if (e.threadId === threadId && e.type === "turn.completed") done();
-    });
-    const timer = setTimeout(done, timeoutMs);
-    if (!store.botByThread(threadId)?.busy) done(); // settled between check and subscribe
-  });
-}
-
-// Edits serialize per bot (interrupt → settle → branch → restart is one
-// atomic step); two racing edits must never each start a turn.
-const editChains = new Map<string, Promise<void>>();
-function enqueueEdit(botId: string, job: () => Promise<void>): Promise<void> {
-  const prev = editChains.get(botId) ?? Promise.resolve();
-  const next = prev.then(job, job);
-  editChains.set(
-    botId,
-    next.catch(() => {}),
-  );
-  return next;
 }
 
 // ── config hot-reload ─────────────────────────────────────────────────
@@ -682,17 +630,21 @@ const server = createServer(async (req, res) => {
     }
 
     // edit a user message → fork the conversation there and rerun the turn.
-    // If a turn is running it is interrupted and allowed to settle first,
-    // so the old and new branches can never generate at the same time.
+    // Rewinding a live thread is refused, exactly like switching versions
+    // below: interrupting mid-flight and branching under the dying turn is
+    // how a conversation ends up with two tails. Stop, then edit.
     m = path.match(/^\/api\/bots\/([\w-]+)\/messages\/([\w-]+)\/edit$/);
     if (m && method === "POST") {
-      const botId = m[1];
       const messageId = m[2];
-      const bot = store.bot(botId);
+      const bot = store.bot(m[1]);
       if (!bot) return json(res, 404, { error: "no such bot" });
       const body = await readBody(req);
       const text = String(body.text ?? "").trim();
       if (!text) return json(res, 400, { error: "text required" });
+      // everything from here down is synchronous, so two racing edits can
+      // never both get past this check: startTurn flips busy before the
+      // next request is handled
+      if (bot.busy) return json(res, 409, { error: "the bot is working — stop it before editing" });
       const source = store.messagesFor(bot.threadId).find((msg) => msg.id === messageId);
       if (!source || source.role !== "user" || source.kind !== "text") {
         return json(res, 404, { error: "only user messages can be edited" });
@@ -702,32 +654,12 @@ const server = createServer(async (req, res) => {
           error: `provider instance "${bot.modelSelection.instanceId}" is unavailable — pick another model in settings`,
         });
       }
-      await enqueueEdit(botId, async () => {
-        const current = store.bot(botId);
-        if (!current) return;
-        if (current.busy) {
-          await registry
-            .get(current.modelSelection.instanceId)
-            ?.adapter.interruptTurn(current.threadId)
-            .catch(() => {});
-          await waitForIdle(current.threadId);
-          if (store.bot(botId)?.busy) {
-            // the driver never confirmed — force-settle, and fence the dead
-            // turn so anything it still emits is dropped at the bus
-            const dead = liveTurns.get(current.threadId);
-            if (dead) staleTurns.add(dead);
-            store.patchBot(botId, { busy: false });
-            broadcast({ kind: "bot", bot: store.bot(botId) });
-          }
-          await new Promise((r) => setTimeout(r, 200)); // drain stragglers
-        }
-        const message = store.branchMessage(current.threadId, messageId, text);
-        if (!message) return;
-        store.patchBot(botId, { rewound: true });
-        broadcast({ kind: "message", threadId: current.threadId, message });
-        broadcast({ kind: "thread", threadId: current.threadId, activeLeafId: message.id });
-        await startTurn(botId, text, { userMessage: message });
-      });
+      const message = store.branchMessage(bot.threadId, messageId, text);
+      if (!message) return json(res, 404, { error: "no such message" });
+      store.patchBot(bot.id, { rewound: true });
+      broadcast({ kind: "message", threadId: bot.threadId, message });
+      broadcast({ kind: "thread", threadId: bot.threadId, activeLeafId: message.id });
+      await startTurn(bot.id, text, { userMessage: message });
       return json(res, 202, { ok: true });
     }
 

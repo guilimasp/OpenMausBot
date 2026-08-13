@@ -173,7 +173,7 @@ posixOnly("conversation branching e2e (fake ACP fleet)", () => {
   );
 
   it(
-    "editing mid-turn interrupts the old turn instead of running two at once",
+    "refuses to rewind a live thread, then edits cleanly once it is stopped",
     async () => {
       const created = (await api("POST", "/api/bots")).body.bot;
       await api("PATCH", `/api/bots/${created.id}`, {
@@ -193,8 +193,16 @@ posixOnly("conversation branching e2e (fake ACP fleet)", () => {
       const anyMsg = bot0.messages[0];
       expect((await api("POST", `/api/bots/${created.id}/active-branch`, { messageId: anyMsg.id })).status).toBe(409);
 
-      // the edit interrupts, waits for the old turn to settle, then forks
+      // ...and so is editing: branching under a dying turn is what grows a
+      // second tail, so the thread must be stopped first
       const first: Msg = bot0.messages.find((m: Msg) => m.role === "user" && m.text === "first try");
+      const midTurn = await api("POST", `/api/bots/${created.id}/messages/${first.id}/edit`, { text: "second try" });
+      expect(midTurn.status).toBe(409);
+      expect((await getBot(created.id)).messages.filter((m: Msg) => m.text === "second try")).toHaveLength(0);
+
+      // stop the turn, then the same edit forks the conversation
+      expect((await api("POST", `/api/bots/${created.id}/interrupt`)).status).toBe(200);
+      await waitFor(async () => (await getBot(created.id)).busy === false, "the turn to settle", 20_000);
       expect((await api("POST", `/api/bots/${created.id}/messages/${first.id}/edit`, { text: "second try" })).status).toBe(202);
 
       await waitFor(async () => {
