@@ -12,6 +12,14 @@ import { fileAnnex, formatSize, pasteAnnex, pasteSummary, type Annex } from "@/l
 const INLINE_LIMIT = 512 * 1024;
 const isTextish = (f: File) => f.type.startsWith("text/") || f.type === "application/json";
 
+/** Electron 32 removed File.path, so only the preload can name a dropped
+ * file. Read structurally: the bridge is upstream's type, and this file
+ * has to compile whether or not the shell exposing it is in the tree. */
+function pathForFile(file: File): string {
+  const bridge = window.ogb as unknown as { getPathForFile?: (f: File) => string } | undefined;
+  return bridge?.getPathForFile?.(file) ?? "";
+}
+
 export function ComposerAnnexes({
   items,
   onAdd,
@@ -53,7 +61,7 @@ export function ComposerAnnexes({
       const made: Annex[] = [];
       const pathless: string[] = [];
       for (const f of files) {
-        const path = window.ogb?.getPathForFile?.(f) ?? "";
+        const path = pathForFile(f);
         if (path) made.push(fileAnnex(f.name, path, f.size));
         else if (isTextish(f) && f.size <= INLINE_LIMIT) {
           void f.text().then((t) => onAdd([pasteAnnex(t)]));
