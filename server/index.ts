@@ -682,7 +682,11 @@ async function startTurn(
       });
       // dispatched: the rewind is spent, and the old cursors are dead
       if (rewound) store.patchBot(bot.id, { rewound: false, resumeCursors: {} });
-      if (previewBoxId) {
+      // a turn can settle before dispatch returns, and a poller started
+      // after its own turn.completed would never be torn down — it would
+      // keep polling the box forever, carrying dead per-turn state. busy
+      // is flipped false in the fold, so it is the honest "still running".
+      if (previewBoxId && store.bot(bot.id)?.busy) {
         startScreenPoller(bot.id, previewBoxId, { screenIsTheWork: instance.driverKind === "boxAgent" });
       }
     } catch (e) {
