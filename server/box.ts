@@ -170,6 +170,32 @@ export function boxErrorMessage(status: number, what: string, body?: any): strin
   return theirs ? `${what} failed: ${theirs}` : `${what} failed (${status})`;
 }
 
+/** The auto-stop we ask for, and the ceiling a free trial will accept.
+ * Both are substrate-side backstops: the box archives itself (billing
+ * pauses, disk survives) if every stop path dies. */
+const TTL_SECONDS = 8 * 60 * 60;
+const TRIAL_TTL_SECONDS = 2 * 60 * 60;
+
+/** Create a box, retrying at the trial ceiling when — and only when — the
+ * provider refuses the 8h auto-stop because the account is on a free
+ * trial. Without this the Computer panel cannot provision a box at all on
+ * a trial account: the create is rejected before anything else runs. */
+async function createBox(cfg: AppConfig) {
+  const first = await boxJson(cfg, "/boxes", {
+    method: "POST",
+    body: JSON.stringify({ ttlSeconds: TTL_SECONDS }),
+  });
+  if (first.ok || !isTrialTtlRefusal(first.body)) return first;
+  return boxJson(cfg, "/boxes", {
+    method: "POST",
+    body: JSON.stringify({ ttlSeconds: TRIAL_TTL_SECONDS }),
+  });
+}
+
+function isTrialTtlRefusal(body: any) {
+  return body?.code === "trial_auto_stop_required" || body?.error?.code === "trial_auto_stop_required";
+}
+
 /** Box state for the Computer panel. */
 export async function boxStatus(cfg: AppConfig, botId: string) {
   if (!boxConfigured(cfg)) return { configured: false, box: null };
@@ -193,12 +219,7 @@ export async function provisionBox(cfg: AppConfig, botId: string, botName: strin
   let box = await findBox(cfg, botId);
   let created = false;
   if (!box) {
-    const createRes = await boxJson(cfg, "/boxes", {
-      method: "POST",
-      // substrate-side backstop: archives itself (billing pauses, disk
-      // survives) if every stop path dies
-      body: JSON.stringify({ ttlSeconds: 8 * 60 * 60 }),
-    });
+    const createRes = await createBox(cfg);
     if (!createRes.ok || !createRes.body?.box?.id) {
       throw new Error(boxErrorMessage(createRes.status, "box create", createRes.body));
     }
