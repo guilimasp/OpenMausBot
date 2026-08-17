@@ -1,7 +1,7 @@
 {
   "name": "openmausbot",
   "private": true,
-  "version": "0.1.17",
+  "version": "0.1.23",
   "description": "A local-first chat app for running a team of AI agents.",
   "homepage": "https://github.com/milind-soni/OpenMausBot",
   "repository": {
@@ -21,12 +21,15 @@
   },
   "packageManager": "pnpm@10.33.0",
   "scripts": {
+    "clean": "node scripts/clean.mjs",
+    "lint": "oxlint .",
     "dev": "vite",
     "dev:server": "node --experimental-strip-types server/index.ts",
     "dev:desktop": "electron .",
     "build": "tsc -b && tsc -p tsconfig.server.json && vite build",
     "typecheck": "tsc -b && tsc -p tsconfig.server.json",
-    "test": "vitest run",
+    "test": "vitest run && pnpm test:updater",
+    "test:updater": "node --test electron/updater-coordinator.node-test.mjs",
     "bench:observation": "node --experimental-strip-types scripts/bench-observation.ts",
     "test:watch": "vitest",
     "test:cua": "pnpm build:cua && node scripts/smoke-cua.mjs",
@@ -45,7 +48,7 @@
     "package": "pnpm package:mac"
   },
   "dependencies": {
-    "@trycua/cua-driver": "0.19.3",
+    "@trycua/cua-driver": "0.20.0",
     "clsx": "^2.1.1",
     "lucide-react": "^0.539.0",
     "posthog-js": "^1.415.6",
@@ -57,6 +60,7 @@
     "tailwind-merge": "^3.3.1"
   },
   "devDependencies": {
+    "@oxlint/plugins": "1.78.0",
     "@tailwindcss/vite": "^4.1.11",
     "@types/node": "^26.2.0",
     "@types/react": "^19.1.9",
@@ -66,6 +70,7 @@
     "electron-builder": "^26.15.3",
     "electron-updater": "^6.8.9",
     "esbuild": "^0.28.2",
+    "oxlint": "1.78.0",
     "tailwindcss": "^4.1.11",
     "typescript": "^5.8.3",
     "vite": "^7.1.0",
