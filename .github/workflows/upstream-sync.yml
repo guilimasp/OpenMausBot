@@ -18,6 +18,9 @@ on:
 permissions:
   contents: write
   issues: write
+  # upstream owns .github/workflows/ too, and mirroring main
+  # is rejected outright when one of its workflow files moved
+  workflows: write
 jobs:
   sync:
     runs-on: ubuntu-latest
@@ -92,9 +95,13 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           MODE: ${{ steps.rebase.outputs.rebased }}
           VERIFY: ${{ steps.verify.outcome }}
+        # A report that cannot be delivered (issues turned off on the fork,
+        # for one) is a lost notification, not a failed sync — the summary
+        # is written either way, and the step never fails the run.
+        continue-on-error: true
         run: |
           existing=$(gh issue list --repo "$GITHUB_REPOSITORY" \
-            --search "Upstream sync needs attention in:title" --state open --json number --jq length)
+            --search "Upstream sync needs attention in:title" --state open --json number --jq length 2>/dev/null || echo 0)
           if [ "$existing" != "0" ]; then exit 0; fi
           run_url="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
           case "$MODE" in
@@ -105,5 +112,6 @@ jobs:
             *)
               body="The sync rebased \`hermes\` onto the new upstream \`main\`, but typecheck or tests failed (\`$VERIFY\`), so nothing was pushed — the app keeps running the last good build. Upstream likely broke something: $run_url" ;;
           esac
+          echo "$body" >> "$GITHUB_STEP_SUMMARY"
           gh issue create --repo "$GITHUB_REPOSITORY" \
             --title "Upstream sync needs attention" --body "$body"
