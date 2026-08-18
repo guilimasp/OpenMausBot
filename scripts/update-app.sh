@@ -121,6 +121,9 @@ pnpm build:updater
 # never committed, so this branch keeps touching zero upstream files — and
 # skipped automatically once upstream ships a padded icon.
 ICON_DIR="$PWD/build/.dock-icon"
+# Expanding an empty array counts as unset under `set -u` in the bash 3.2
+# macOS ships, so the use below is guarded — and now that upstream ships a
+# padded icon, empty is the normal case.
 ICON_ARGS=()
 icon_python() {
   for py in python3 /usr/local/bin/python3 /opt/homebrew/bin/python3 \
@@ -148,7 +151,7 @@ elif [ "$icon_status" -ne 3 ]; then
   echo "icon step failed ($icon_status) — building with the stock icon" >&2
 fi
 
-CSC_IDENTITY_AUTO_DISCOVERY=false pnpm exec electron-builder --mac "${ICON_ARGS[@]}" --publish never
+CSC_IDENTITY_AUTO_DISCOVERY=false pnpm exec electron-builder --mac ${ICON_ARGS[@]+"${ICON_ARGS[@]}"} --publish never
 
 echo "==> Installing to $APP"
 osascript -e 'tell application "OpenMausBot" to quit' >/dev/null 2>&1 || true
