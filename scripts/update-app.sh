@@ -80,6 +80,11 @@ restore_tree() {
     # dirty; it is regenerated on every build anyway
     git checkout -- dist-server 2>/dev/null || true
   fi
+  # electron/vendor is the same kind of thing and is rebuilt whether or not
+  # a patch applied: the local bundler emits a different (equivalent) file
+  # from the one upstream committed, and left behind it fails the dirty-tree
+  # check at the top of the *next* run
+  git checkout -- electron/vendor 2>/dev/null || true
   # only undo an icon swap this run actually made: a leftover build dir from
   # an older version holds that version's icon, and restoring it blindly
   # reverts whatever upstream has shipped since
