@@ -80,7 +80,12 @@ restore_tree() {
     # dirty; it is regenerated on every build anyway
     git checkout -- dist-server 2>/dev/null || true
   fi
-  [ -f "${ICON_DIR:-}/app-icon.orig.png" ] && cp "$ICON_DIR/app-icon.orig.png" electron/resources/app-icon.png 2>/dev/null || true
+  # only undo an icon swap this run actually made: a leftover build dir from
+  # an older version holds that version's icon, and restoring it blindly
+  # reverts whatever upstream has shipped since
+  if [ "${ICON_SWAPPED:-}" = 1 ]; then
+    cp "$ICON_DIR/app-icon.orig.png" electron/resources/app-icon.png 2>/dev/null || true
+  fi
 }
 trap restore_tree EXIT
 
@@ -146,6 +151,7 @@ if [ "$icon_status" -eq 0 ]; then
   # is packed into the asar, so it has to be in place before packaging
   cp electron/resources/app-icon.png "$ICON_DIR/app-icon.orig.png"
   cp "$ICON_DIR/app-icon.png" electron/resources/app-icon.png
+  ICON_SWAPPED=1
   ICON_ARGS=(-c.mac.icon="$ICON_DIR/icon.icns")
 elif [ "$icon_status" -ne 3 ]; then
   echo "icon step failed ($icon_status) — building with the stock icon" >&2
