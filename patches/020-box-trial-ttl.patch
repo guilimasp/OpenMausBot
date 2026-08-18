@@ -1,49 +1,53 @@
-commit f3b58418cb997657a4119ec62432974c73245a09
-Author: Guilherme Lima <60904312+guilimasp@users.noreply.github.com>
-Date:   Wed Aug 12 19:39:39 2026 -0300
-
-    box: fall back to a 2h TTL when the account is on the free trial
-    
-    Creating a box asked for an 8h auto-stop, which free-trial accounts
-    reject with 400 trial_auto_stop_required ("Free-trial Boxes can auto-stop
-    after at most 2 hours"), so the Computer panel could never provision a
-    box on a trial account. Retry at the trial ceiling when the API says so,
-    and surface the API's own message in the thrown error instead of a bare
-    status code.
-    
-    Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
-    Claude-Session: https://claude.ai/code/session_01LbrfeNax1KL2rMf7Lwo6gX
-
 diff --git a/server/box.ts b/server/box.ts
-index 0cef43d..c20aade 100644
+index 485091a..4a34af2 100644
 --- a/server/box.ts
 +++ b/server/box.ts
-@@ -122,13 +122,24 @@ export async function provisionBox(cfg: AppConfig, botId: string, botName: strin
-   let box = await findBox(cfg, botId);
+@@ -181,6 +181,31 @@ export async function boxStatus(cfg: AppConfig, botId: string) {
+   };
+ }
+ 
++/** The auto-stop we ask for, and the ceiling a free trial will accept.
++ * Both are substrate-side backstops: the box archives itself (billing
++ * pauses, disk survives) if every stop path dies. */
++const TTL_SECONDS = 8 * 60 * 60;
++const TRIAL_TTL_SECONDS = 2 * 60 * 60;
++
++/** Create a box, retrying at the trial ceiling when — and only when — the
++ * provider refuses the 8h auto-stop because the account is on a free trial.
++ * Without this the Computer panel cannot provision a box at all on a trial
++ * account: the create is rejected before anything else runs.
++ *
++ * noEnv keeps provider-side env injection off: the computer needs the
++ * user's desktop session, not the account owner's host credentials, so API
++ * keys must not silently appear inside the guest. */
++async function createBox(cfg: AppConfig) {
++  const body = (ttlSeconds: number) => JSON.stringify({ ttlSeconds, noEnv: true });
++  const first = await boxJson(cfg, "/boxes", { method: "POST", body: body(TTL_SECONDS) });
++  if (first.ok || !isTrialTtlRefusal(first.body)) return first;
++  return boxJson(cfg, "/boxes", { method: "POST", body: body(TRIAL_TTL_SECONDS) });
++}
++
++function isTrialTtlRefusal(body: any) {
++  return body?.code === "trial_auto_stop_required" || body?.error?.code === "trial_auto_stop_required";
++}
++
+ /**
+  * Find-or-create the bot's persistent box, wait for ready, run the
+  * idempotent bootstrap (screenshot tooling for the computer-use bridge +
+@@ -195,15 +220,7 @@ export async function provisionBox(cfg: AppConfig, botId: string, botName: strin
    let created = false;
-   if (!box) {
--    const createRes = await boxJson(cfg, "/boxes", {
-+    // substrate-side backstop: archives itself (billing pauses, disk
-+    // survives) if every stop path dies. Free-trial accounts cap the TTL at
-+    // 2h and reject anything longer with trial_auto_stop_required, so fall
-+    // back to their ceiling instead of failing to create a box at all.
-+    let createRes = await boxJson(cfg, "/boxes", {
-       method: "POST",
--      // substrate-side backstop: archives itself (billing pauses, disk
--      // survives) if every stop path dies
-       body: JSON.stringify({ ttlSeconds: 8 * 60 * 60 }),
-     });
--    if (!createRes.ok || !createRes.body?.box?.id) throw new Error(`box create failed (${createRes.status})`);
-+    if (createRes.body?.code === "trial_auto_stop_required") {
-+      createRes = await boxJson(cfg, "/boxes", {
-+        method: "POST",
-+        body: JSON.stringify({ ttlSeconds: 2 * 60 * 60 }),
-+      });
-+    }
-+    if (!createRes.ok || !createRes.body?.box?.id) {
-+      const why = createRes.body?.message ?? createRes.body?.error?.message ?? "";
-+      throw new Error(`box create failed (${createRes.status})${why ? `: ${why}` : ""}`);
-+    }
-     box = createRes.body.box;
-     created = true;
-     await boxJson(cfg, `/boxes/${box.id}`, { method: "PATCH", body: JSON.stringify({ name: vmName }) });
+   try {
+     if (!box) {
+-      const createRes = await boxJson(cfg, "/boxes", {
+-        method: "POST",
+-        // substrate-side backstop: archives itself (billing pauses, disk
+-        // survives) if every stop path dies
+-        // The computer needs the user's desktop session, not the account
+-        // owner's host credentials. Keep provider-side env injection off so
+-        // API keys cannot silently appear inside the guest.
+-        body: JSON.stringify({ ttlSeconds: 8 * 60 * 60, noEnv: true }),
+-      });
++      const createRes = await createBox(cfg);
+       if (!createRes.ok || !createRes.body?.box?.id) {
+         throw new Error(boxErrorMessage(createRes.status, "box create", createRes.body));
+       }
