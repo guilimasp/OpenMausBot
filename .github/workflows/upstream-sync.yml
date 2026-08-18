@@ -18,9 +18,6 @@ on:
 permissions:
   contents: write
   issues: write
-  # upstream owns .github/workflows/ too, and mirroring main
-  # is rejected outright when one of its workflow files moved
-  workflows: write
 jobs:
   sync:
     runs-on: ubuntu-latest
@@ -29,14 +26,41 @@ jobs:
         with:
           ref: main
           fetch-depth: 0
+      # GITHUB_TOKEN is refused any push that adds or changes a file under
+      # .github/workflows/. No `permissions:` key grants it — only a PAT with
+      # `workflow` scope can. So the day upstream edits one of its own
+      # workflow files, the mirror is rejected and the fork silently stops
+      # tracking upstream: that is what stalled this one on 0.1.14 while
+      # upstream shipped 0.1.24.
+      #
+      # Workflow files never reach the app, so the fallback is to keep ours.
+      # The retry pushes a tree whose .github/workflows/ is unchanged, which
+      # the token is allowed to do. Set the SYNC_TOKEN secret to a PAT with
+      # `workflow` scope to mirror those files too.
+      - name: Use a PAT for pushes, if one is configured
+        env:
+          SYNC_TOKEN: ${{ secrets.SYNC_TOKEN }}
+        run: |
+          [ -n "${SYNC_TOKEN:-}" ] || exit 0
+          git remote set-url origin \
+            "https://x-access-token:$SYNC_TOKEN@github.com/$GITHUB_REPOSITORY.git"
       - name: Mirror main from upstream
         run: |
+          git config user.name "upstream-sync[bot]"
+          git config user.email "actions@users.noreply.github.com"
           git remote add upstream https://github.com/milind-soni/OpenMausBot.git
           git fetch upstream main
           # main is a pure mirror and upstream rewrites its history
           # (amends and rebases land most days), so mirror by reset rather
           # than merge — a fast-forward would fail on every rewrite
           git reset --hard upstream/main
+          if git push --force origin main; then exit 0; fi
+          echo "Kept the fork's .github/workflows/ — the token may not push upstream's." \
+            >> "$GITHUB_STEP_SUMMARY"
+          git fetch origin main
+          git rm -rq --ignore-unmatch .github/workflows
+          git checkout FETCH_HEAD -- .github/workflows
+          git commit -q -m "Keep the fork's workflow files (the sync token cannot push upstream's)"
           git push --force origin main
       - name: Rebase hermes onto main
         id: rebase
@@ -87,7 +111,16 @@ jobs:
           pnpm test
       - name: Push hermes
         if: steps.verify.outcome == 'success'
-        run: git push --force-with-lease origin hermes
+        # Same restriction as the mirror above. --force-with-lease is dropped
+        # on the retry: the lease was already checked by the attempt that
+        # failed on the workflow file, not on a concurrent write.
+        run: |
+          if git push --force-with-lease origin hermes; then exit 0; fi
+          git fetch origin hermes
+          git rm -rq --ignore-unmatch .github/workflows
+          git checkout FETCH_HEAD -- .github/workflows
+          git commit -q -m "Keep the fork's workflow files (the sync token cannot push upstream's)"
+          git push --force origin hermes
       # Losing a local edit is fine, but it must never happen silently.
       - name: Report a sync that dropped something or failed
         if: always() && (failure() || steps.rebase.outputs.rebased != 'clean')
