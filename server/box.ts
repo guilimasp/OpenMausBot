@@ -1038,8 +1038,28 @@ export const PANEL_FRAME_QUALITY = 85;
 // ffmpeg's -q:v runs 2 (best) to 31; 3 lands near JPEG quality 85.
 const PANEL_FRAME_FFMPEG_Q = 3;
 
-/** The shell that captures one panel frame on the box. Exported for tests. */
-export function panelShotCommand({ width = PANEL_FRAME_WIDTH, quality = PANEL_FRAME_QUALITY } = {}): string {
+// The dynamic cursor: the bot's pointer drawn into the frame in the bot's own
+// colour, at the position X reports, big enough to follow in the panel. The
+// arrow is the app's cursor shape (see CursorAvatar) at 1.5× the 26×36 glyph,
+// hotspot at the tip, with a soft shadow so it reads on light pages too.
+const CURSOR_POINTS: Array<[number, number]> = [[0, 0], [0, 39], [10, 30], [16, 46], [23, 43], [16, 28], [30, 28]];
+const CURSOR_HEX = /^#[0-9a-fA-F]{6}$/;
+
+function cursorPolygon(dx: number, dy: number): string {
+  return CURSOR_POINTS.map(([x, y]) => `$((X+${x + dx})),$((Y+${y + dy}))`).join(" ");
+}
+
+/** The shell that captures one panel frame on the box. Exported for tests.
+ * With `cursor` (a #rrggbb swatch) the frame carries the dynamic cursor in
+ * that colour instead of the plain X pointer. */
+export function panelShotCommand({
+  width = PANEL_FRAME_WIDTH,
+  quality = PANEL_FRAME_QUALITY,
+  cursor,
+}: { width?: number; quality?: number; cursor?: string } = {}): string {
+  const dynamicCursor = cursor !== undefined && CURSOR_HEX.test(cursor);
+  const pointer = dynamicCursor ? "" : "-p ";
+  const drawMouse = dynamicCursor ? 0 : 1;
   return [
     "export DISPLAY=${DISPLAY:-:0}",
     `f=${PANEL_PATH}`,
@@ -1047,7 +1067,14 @@ export function panelShotCommand({ width = PANEL_FRAME_WIDTH, quality = PANEL_FR
     'rm -f "$f"',
     'w=$(xdotool getdisplaygeometry 2>/dev/null | cut -d" " -f1)',
     'case "$w" in ""|*[!0-9]*) w=0;; esac',
-    `scrot -o -p -q ${quality} "$f" 2>/dev/null || import -window root -quality ${quality} "$f" 2>/dev/null || ffmpeg -y -f x11grab -draw_mouse 1 -i "$DISPLAY" -frames:v 1 -q:v ${PANEL_FRAME_FFMPEG_Q} "$f" >/dev/null 2>&1`,
+    `scrot -o ${pointer}-q ${quality} "$f" 2>/dev/null || import -window root -quality ${quality} "$f" 2>/dev/null || ffmpeg -y -f x11grab -draw_mouse ${drawMouse} -i "$DISPLAY" -frames:v 1 -q:v ${PANEL_FRAME_FFMPEG_Q} "$f" >/dev/null 2>&1`,
+    ...(dynamicCursor
+      ? [
+          'eval "$(xdotool getmouselocation --shell 2>/dev/null)"',
+          'case "$X$Y" in ""|*[!0-9]*) X=;; esac',
+          `if [ -n "$X" ] && command -v convert >/dev/null 2>&1; then convert "$f" -fill "rgba(0,0,0,0.35)" -stroke none -draw "polygon ${cursorPolygon(2, 3)}" -fill "${cursor}" -stroke white -strokewidth 2.5 -draw "polygon ${cursorPolygon(0, 0)}" "$f" 2>/dev/null || true; fi`,
+        ]
+      : []),
     `if [ "$w" -gt ${width} ] 2>/dev/null && command -v convert >/dev/null 2>&1; then convert "$f" -resize ${width}x -quality ${quality} "$f" 2>/dev/null || true; fi`,
     'test -s "$f" && echo captured',
   ].join("; ");
@@ -1073,7 +1100,13 @@ async function readFileBase64(cfg: AppConfig, boxId: string, path: string): Prom
 
 /** `knownBoxId` skips box resolution entirely — the screen poller holds
  * the id for the whole turn and must not re-resolve it every frame. */
-export async function screenshotBox(cfg: AppConfig, botId: string, knownBoxId?: string) {
+export async function screenshotBox(
+  cfg: AppConfig,
+  botId: string,
+  knownBoxId?: string,
+  /** `cursor`: the bot's colour swatch; the frame then carries the dynamic cursor. */
+  { cursor }: { cursor?: string } = {},
+) {
   cfg = snapshotBoxConfig(cfg);
   let boxId = knownBoxId;
   if (!boxId) {
@@ -1082,7 +1115,7 @@ export async function screenshotBox(cfg: AppConfig, botId: string, knownBoxId?: 
     if (!READY.has(box.state)) throw new Error(`box is ${box.state}`);
     boxId = box.id as string;
   }
-  const out = await runCommand(cfg, boxId, SHOT_CMD, { timeoutMs: 60_000 });
+  const out = await runCommand(cfg, boxId, cursor ? panelShotCommand({ cursor }) : SHOT_CMD, { timeoutMs: 60_000 });
   if (!/captured/.test(out.stdout)) {
     throw new Error(out.stderr.slice(0, 200) || "screen capture failed on the box");
   }

@@ -20,6 +20,30 @@ describe("cloud panel frame capture", () => {
     expect(cmd).not.toContain("-thumbnail");
   });
 
+  it("draws the dynamic cursor in the bot's colour at the real pointer position", () => {
+    const cmd = panelShotCommand({ cursor: "#E78531" });
+    // our own arrow replaces the X pointer, so neither capture path draws it
+    expect(cmd).toContain('scrot -o -q 85 "$f"');
+    expect(cmd).not.toContain("scrot -o -p");
+    expect(cmd).toContain("x11grab -draw_mouse 0");
+    // position comes from X itself, never from the model
+    expect(cmd).toContain('eval "$(xdotool getmouselocation --shell 2>/dev/null)"');
+    expect(cmd).toContain('case "$X$Y" in ""|*[!0-9]*) X=;; esac');
+    // shadow first, then the coloured arrow with a white edge, tip at (X,Y)
+    expect(cmd).toContain('-fill "rgba(0,0,0,0.35)" -stroke none -draw "polygon $((X+2)),$((Y+3))');
+    expect(cmd).toContain('-fill "#E78531" -stroke white -strokewidth 2.5 -draw "polygon $((X+0)),$((Y+0)) $((X+0)),$((Y+39))');
+    // drawn before the downscale, so the arrow scales with the frame
+    expect(cmd.indexOf("getmouselocation")).toBeLessThan(cmd.indexOf("-resize 1920x"));
+  });
+
+  it("ignores anything that is not a #rrggbb swatch", () => {
+    for (const bad of ["orange", "#fff", "#E78531; rm -rf /", "rgb(1,2,3)", ""]) {
+      const cmd = panelShotCommand({ cursor: bad });
+      expect(cmd).not.toContain("getmouselocation");
+      expect(cmd).toContain("scrot -o -p -q 85");
+    }
+  });
+
   it("keeps the capture fallbacks and the success marker", () => {
     const cmd = panelShotCommand();
     expect(cmd).toMatch(/scrot .* \|\| import .* \|\| ffmpeg .*x11grab/);
